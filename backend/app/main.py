@@ -6,6 +6,8 @@ from fastapi.responses import JSONResponse
 
 from app.config import settings
 from app.core.logging import setup_logging
+from app.db.base import init_db, close_db
+from app.services.notification_service import notification_service
 
 # Setup logging
 logger = setup_logging()
@@ -18,16 +20,50 @@ async def lifespan(app: FastAPI):
     logger.info(f"Environment: {settings.ENVIRONMENT}")
     
     # Startup
-    # TODO: Initialize database connection
-    # TODO: Initialize Redis connection
-    # TODO: Initialize notification service
+    try:
+        # Initialize database connection
+        logger.info("Initializing database connection...")
+        engine, session_factory = init_db()
+        logger.info("✓ Database connection initialized")
+        
+        # Initialize Redis connection (optional, for notifications pub/sub)
+        try:
+            import redis.asyncio as redis
+            redis_client = await redis.from_url(
+                settings.REDIS_URL,
+                encoding="utf-8",
+                decode_responses=True
+            )
+            notification_service.set_redis(redis_client)
+            await notification_service.start_redis_listener()
+            logger.info("✓ Redis connection initialized")
+        except Exception as e:
+            logger.warning(f"Redis not available (notifications will work locally only): {e}")
+        
+        logger.info(f"{settings.APP_NAME} startup complete")
+        
+    except Exception as e:
+        logger.error(f"Failed to initialize application: {e}")
+        raise
     
     yield
     
     # Shutdown
     logger.info("Shutting down application")
-    # TODO: Close database connections
-    # TODO: Close Redis connections
+    
+    try:
+        # Stop notification service
+        await notification_service.stop_redis_listener()
+        logger.info("✓ Notification service stopped")
+        
+        # Close database connections
+        await close_db()
+        logger.info("✓ Database connections closed")
+        
+    except Exception as e:
+        logger.error(f"Error during shutdown: {e}")
+    
+    logger.info("Shutdown complete")
 
 
 # Create FastAPI application
@@ -88,7 +124,7 @@ async def general_exception_handler(request, exc):
 
 
 # Register API routers
-from app.api.v1 import auth, chat, tools, audit, vault, documents, llm
+from app.api.v1 import auth, chat, tools, audit, vault, documents, llm, notifications
 
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["Authentication"])
 app.include_router(chat.router, prefix="/api/v1/chat", tags=["Chat"])
@@ -97,11 +133,7 @@ app.include_router(audit.router, prefix="/api/v1", tags=["Audit"])
 app.include_router(vault.router, prefix="/api/v1", tags=["Vault"])
 app.include_router(documents.router, prefix="/api/v1", tags=["Documents"])
 app.include_router(llm.router, prefix="/api/v1", tags=["LLM"])
-
-# TODO: Register additional routers
-# from app.api.v1 import notifications
-# app.include_router(notifications.router, prefix="/api/v1/notifications", tags=["Notifications"])
-# ... etc
+app.include_router(notifications.router, prefix="/api/v1", tags=["Notifications"])
 
 
 if __name__ == "__main__":

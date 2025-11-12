@@ -21,6 +21,12 @@ from app.models.document import (
     SearchResult,
     EmbeddingModel,
 )
+from app.models.notification import (
+    Notification,
+    NotificationPreference,
+    NotificationType,
+    NotificationPriority,
+)
 
 __all__ = [
     # Base
@@ -59,4 +65,9 @@ __all__ = [
     "DocumentChunk",
     "SearchResult",
     "EmbeddingModel",
+    # Notifications
+    "Notification",
+    "NotificationPreference",
+    "NotificationType",
+    "NotificationPriority",
 ]

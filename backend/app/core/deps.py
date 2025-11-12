@@ -1,9 +1,10 @@
 """FastAPI dependencies for authentication and authorization."""
-from typing import Generator, Optional
+from typing import Optional
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from app.config import settings
 from app.core.security import validate_access_token
@@ -14,15 +15,15 @@ from app.models.user import User
 security = HTTPBearer()
 
 
-def get_current_user(
+async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> User:
     """Get the current authenticated user from JWT token.
     
     Args:
         credentials: HTTP Bearer credentials with JWT token
-        db: Database session
+        db: Async database session
         
     Returns:
         The authenticated user
@@ -43,7 +44,11 @@ def get_current_user(
         )
     
     # Get user from database
-    user = db.query(User).filter(User.id == int(user_id)).first()
+    result = await db.execute(
+        select(User).where(User.id == int(user_id))
+    )
+    user = result.scalar_one_or_none()
+    
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -61,7 +66,7 @@ def get_current_user(
     return user
 
 
-def get_current_active_user(
+async def get_current_active_user(
     current_user: User = Depends(get_current_user),
 ) -> User:
     """Get current active user (alias for clarity).
@@ -75,7 +80,7 @@ def get_current_active_user(
     return current_user
 
 
-def get_current_superuser(
+async def get_current_superuser(
     current_user: User = Depends(get_current_user),
 ) -> User:
     """Get current user if they are a superuser.
@@ -106,7 +111,7 @@ def require_permission(permission: str):
     Returns:
         A dependency function that checks the permission
     """
-    def permission_checker(
+    async def permission_checker(
         current_user: User = Depends(get_current_user),
     ) -> User:
         if not current_user.has_permission(permission):
@@ -128,7 +133,7 @@ def require_role(role: str):
     Returns:
         A dependency function that checks the role
     """
-    def role_checker(
+    async def role_checker(
         current_user: User = Depends(get_current_user),
     ) -> User:
         if not current_user.has_role(role):
@@ -141,9 +146,9 @@ def require_role(role: str):
     return role_checker
 
 
-def get_optional_user(
+async def get_optional_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False)),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> Optional[User]:
     """Get the current user if authenticated, None otherwise.
     
@@ -151,7 +156,7 @@ def get_optional_user(
     
     Args:
         credentials: Optional HTTP Bearer credentials
-        db: Database session
+        db: Async database session
         
     Returns:
         The authenticated user or None
@@ -168,7 +173,11 @@ def get_optional_user(
         return None
     
     # Get user from database
-    user = db.query(User).filter(User.id == int(user_id)).first()
+    result = await db.execute(
+        select(User).where(User.id == int(user_id))
+    )
+    user = result.scalar_one_or_none()
+    
     if user is None or not user.is_active:
         return None
     
