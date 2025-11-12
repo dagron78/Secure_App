@@ -1,0 +1,5 @@
+{
+  "name": "Copy of Confidential Data Steward Agent (CDSA)",
+  "description": "A secure, auditable, and locally-controlled agentic interface for experts to interact with, analyze, and transform sensitive data in highly regulated industries. This UI mockup focuses on the chat interface and tool registry.",
+  "requestFramePermissions": []
+}

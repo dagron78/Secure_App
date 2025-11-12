@@ -1,0 +1,106 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database with pgvector
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: cdsa-postgres
+    environment:
+      POSTGRES_DB: cdsa_db
+      POSTGRES_USER: cdsa
+      POSTGRES_PASSWORD: changeme
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cdsa"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - cdsa-network
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: cdsa-redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - cdsa-network
+
+  # FastAPI Application
+  api:
+    build: .
+    container_name: cdsa-api
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    environment:
+      DATABASE_URL: postgresql+asyncpg://cdsa:changeme@postgres:5432/cdsa_db
+      REDIS_URL: redis://redis:6379/0
+    env_file:
+      - .env
+    volumes:
+      - ./app:/app/app
+      - ./uploads:/app/uploads
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - cdsa-network
+
+  # Celery Worker
+  celery_worker:
+    build: .
+    container_name: cdsa-celery-worker
+    command: celery -A app.tasks worker --loglevel=info
+    environment:
+      DATABASE_URL: postgresql+asyncpg://cdsa:changeme@postgres:5432/cdsa_db
+      REDIS_URL: redis://redis:6379/0
+    env_file:
+      - .env
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - cdsa-network
+
+  # Ollama (Local LLM) - Optional
+  ollama:
+    image: ollama/ollama:latest
+    container_name: cdsa-ollama
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    # Uncomment for GPU support
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    networks:
+      - cdsa-network
+
+volumes:
+  postgres_data:
+  redis_data:
+  ollama_data:
+
+networks:
+  cdsa-network:
+    driver: bridge

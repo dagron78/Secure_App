@@ -1,0 +1,128 @@
+[project]
+name = "cdsa-backend"
+version = "0.1.0"
+description = "Confidential Data Steward Agent - Backend API"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    # Web Framework
+    "fastapi>=0.109.0",
+    "uvicorn[standard]>=0.27.0",
+    "python-multipart>=0.0.6",
+    "sse-starlette>=1.8.2",
+    
+    # Database
+    "sqlalchemy>=2.0.25",
+    "psycopg2-binary>=2.9.9",
+    "alembic>=1.13.1",
+    "asyncpg>=0.29.0",
+    
+    # Redis & Caching
+    "redis>=5.0.1",
+    "hiredis>=2.3.2",
+    
+    # Background Tasks
+    "celery>=5.3.6",
+    
+    # Authentication
+    "python-jose[cryptography]>=3.3.0",
+    "passlib[bcrypt]>=1.7.4",
+    
+    # AI/ML Framework
+    "langchain>=0.1.6",
+    "langchain-openai>=0.0.5",
+    "langchain-anthropic>=0.0.1",
+    "llama-index>=0.9.48",
+    "openai>=1.12.0",
+    "anthropic>=0.8.1",
+    "httpx>=0.25.0",
+    
+    # Local LLM
+    "ollama>=0.1.6",
+    
+    # Vector Database
+    "pgvector>=0.2.4",
+    
+    # Document Processing (Docling)
+    "docling>=2.0.0",
+    "docling-core>=2.0.0",
+    "pypdf>=4.0.1",
+    "python-docx>=1.1.0",
+    "python-pptx>=0.6.23",
+    "beautifulsoup4>=4.12.3",
+    "lxml>=5.1.0",
+    
+    # Embeddings
+    "sentence-transformers>=2.3.1",
+    "torch>=2.2.0",
+    
+    # Data Validation
+    "pydantic>=2.6.0",
+    "pydantic-settings>=2.1.0",
+    "email-validator>=2.1.0",
+    
+    # Security & Encryption
+    "cryptography>=42.0.2",
+    "bcrypt>=4.1.2",
+    
+    # Utilities
+    "python-dateutil>=2.8.2",
+    "pytz>=2024.1",
+    "httpx>=0.26.0",
+    "aiofiles>=23.2.1",
+    
+    # Monitoring & Logging
+    "structlog>=24.1.0",
+    "python-json-logger>=2.0.7",
+    
+    # Configuration
+    "python-dotenv>=1.0.1",
+    "pyyaml>=6.0.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    # Testing
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.4",
+    "pytest-cov>=4.1.0",
+    "pytest-mock>=3.12.0",
+    
+    # Code Quality
+    "black>=24.1.1",
+    "isort>=5.13.2",
+    "flake8>=7.0.0",
+    "mypy>=1.8.0",
+    "pylint>=3.0.3",
+    
+    # Debugging
+    "ipython>=8.20.0",
+    "ipdb>=0.13.13",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.black]
+line-length = 100
+target-version = ['py311']
+include = '\.pyi?$'
+
+[tool.isort]
+profile = "black"
+line_length = 100
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --cov=app --cov-report=term-missing --cov-report=html"
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
