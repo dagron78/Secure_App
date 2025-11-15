@@ -5,6 +5,7 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from app.config import settings
 from app.core.security import validate_access_token
@@ -43,9 +44,11 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    # Get user from database
+    # Get user from database with roles eagerly loaded
     result = await db.execute(
-        select(User).where(User.id == int(user_id))
+        select(User)
+        .where(User.id == int(user_id))
+        .options(selectinload(User.roles))
     )
     user = result.scalar_one_or_none()
     

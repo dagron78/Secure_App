@@ -7,15 +7,19 @@ import { DocumentView } from './components/DocumentView';
 import { AuditView } from './components/AuditView';
 import { SecureVaultView } from './components/SecureVaultView';
 import { LLMGatewayView } from './components/LLMGatewayView';
+import { LoginView } from './components/LoginView';
 import { AppView, User, ApprovalRequest, ApprovalStatus, AuditEvent, Message, MessageAuthor, Secret, AuditEventType, LLMGatewayState, LocalLLM, Document } from './types';
 import { MOCK_USERS, SYSTEM_PROMPT, MOCK_SECURE_VAULT, MOCK_LOCAL_LLMS, MOCK_DOCUMENTS } from './constants';
 import { getAgentResponse as getDemoAgentResponse, continueAgentResponse as continueDemoAgentResponse } from './services/demoAgentService';
 import { getAgentResponse as getLiveAgentResponse, continueAgentResponse as continueLiveAgentResponse } from './services/liveAgentService';
+import { authService, fetchWithAuth } from './services/authService';
 
 
 const LOCAL_STORAGE_KEY = 'cdsa_session_state';
 
 const App: React.FC = () => {
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [currentView, setCurrentView] = useState<AppView>(AppView.CHAT);
   const [currentUser, setCurrentUser] = useState<User>(MOCK_USERS[0]);
   const [messages, setMessages] = useState<Message[]>([SYSTEM_PROMPT]);
@@ -29,6 +33,24 @@ const App: React.FC = () => {
     isConnected: true,
     activeModelId: MOCK_LOCAL_LLMS[0].id,
   });
+
+  // Check authentication status on mount
+  useEffect(() => {
+    const checkAuth = async () => {
+      if (authService.isAuthenticated()) {
+        try {
+          await authService.getCurrentUser();
+          setIsAuthenticated(true);
+        } catch (error) {
+          console.error('Auth check failed:', error);
+          authService.logout();
+          setIsAuthenticated(false);
+        }
+      }
+      setIsCheckingAuth(false);
+    };
+    checkAuth();
+  }, []);
 
   // Load state from localStorage on initial render
   useEffect(() => {
@@ -243,6 +265,73 @@ const App: React.FC = () => {
       });
   }, [addAuditEvent, currentUser]);
 
+  const handleLogin = useCallback(async (username: string, password: string) => {
+    await authService.login(username, password);
+    await authService.getCurrentUser();
+    setIsAuthenticated(true);
+  }, []);
+
+  const handleRegister = useCallback(async (username: string, email: string, password: string, fullName: string) => {
+    await authService.register(username, email, password, fullName);
+    await authService.getCurrentUser();
+    setIsAuthenticated(true);
+  }, []);
+
+  const handleLogout = useCallback(() => {
+    authService.logout();
+    setIsAuthenticated(false);
+    setCurrentView(AppView.CHAT);
+  }, []);
+
+  const handleUploadDocument = useCallback(async (file: File, metadata: { title?: string; classification: string; type: string }) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (metadata.title) formData.append('title', metadata.title);
+    formData.append('auto_index', 'true');
+    
+    try {
+      const response = await fetchWithAuth('/api/v1/documents/upload', {
+        method: 'POST',
+        body: formData,
+      });
+      
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.detail || 'Upload failed');
+      }
+      
+      const uploadedDoc = await response.json();
+      
+      // Add to local state
+      const newDoc: Document = {
+        id: uploadedDoc.id.toString(),
+        title: metadata.title || file.name,
+        type: metadata.type as 'Policy' | 'Guide' | 'Report',
+        summary: `Uploaded ${file.type || 'document'}`,
+        classification: metadata.classification as 'Confidential' | 'Internal' | 'Public',
+        indexed: false,
+      };
+      
+      setDocuments(prev => [...prev, newDoc]);
+      
+      addAuditEvent({
+        id: crypto.randomUUID(),
+        type: AuditEventType.DOCUMENT_UPLOADED,
+        timestamp: new Date().toISOString(),
+        user: currentUser,
+        details: {
+          documentId: newDoc.id,
+          documentTitle: newDoc.title,
+          fileName: file.name,
+          fileSize: file.size
+        },
+      });
+    } catch (error) {
+      console.error('Upload error:', error);
+      throw error;
+    }
+  }, [addAuditEvent, currentUser]);
+
   const handleIndexDocument = useCallback((docId: string) => {
     const docToIndex = documents.find(d => d.id === docId);
     if (docToIndex) {
@@ -260,13 +349,28 @@ const App: React.FC = () => {
   const pendingApprovals = approvalRequests.filter(req => req.status === ApprovalStatus.PENDING);
   const isPendingApproval = messages[messages.length - 1]?.approvalRequest?.id ? approvalRequests.some(req => req.id === messages[messages.length - 1]?.approvalRequest!.id && req.status === ApprovalStatus.PENDING) : false;
 
+  // Show loading state while checking authentication
+  if (isCheckingAuth) {
+    return (
+      <div className="flex h-screen w-full bg-background text-on-surface font-sans items-center justify-center">
+        <div className="text-xl">Loading...</div>
+      </div>
+    );
+  }
+
+  // Show login view if not authenticated
+  if (!isAuthenticated) {
+    return <LoginView onLogin={handleLogin} onRegister={handleRegister} />;
+  }
+
   return (
     <div className="flex h-screen w-full bg-background text-on-surface font-sans">
-      <Sidebar 
-        currentView={currentView} 
+      <Sidebar
+        currentView={currentView}
         onViewChange={handleViewChange}
         currentUser={currentUser}
         onUserChange={handleUserChange}
+        onLogout={handleLogout}
         pendingApprovalCount={pendingApprovals.length}
         isDemoMode={isDemoMode}
         onToggleDemoMode={handleToggleDemoMode}
@@ -287,9 +391,10 @@ const App: React.FC = () => {
         )}
         {currentView === AppView.TOOLS && <ToolRegistryView />}
         {currentView === AppView.DOCUMENTS && (
-          <DocumentView 
+          <DocumentView
             documents={documents}
             onIndexDocument={handleIndexDocument}
+            onUploadDocument={handleUploadDocument}
             currentUser={currentUser}
           />
         )}

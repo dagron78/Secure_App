@@ -7,6 +7,7 @@ interface SidebarProps {
   onViewChange: (view: AppView) => void;
   currentUser: User;
   onUserChange: () => void;
+  onLogout?: () => void;
   pendingApprovalCount: number;
   isDemoMode: boolean;
   onToggleDemoMode: () => void;
@@ -62,7 +63,7 @@ const DemoModeToggle: React.FC<{ isDemoMode: boolean, onToggle: () => void }> = 
 );
 
 
-export const Sidebar: React.FC<SidebarProps> = ({ currentView, onViewChange, currentUser, onUserChange, pendingApprovalCount, isDemoMode, onToggleDemoMode }) => {
+export const Sidebar: React.FC<SidebarProps> = ({ currentView, onViewChange, currentUser, onUserChange, onLogout, pendingApprovalCount, isDemoMode, onToggleDemoMode }) => {
   return (
     <aside className="w-64 flex-shrink-0 bg-secondary p-4 flex flex-col">
       <div className="flex items-center mb-8">
@@ -125,11 +126,20 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onViewChange, cur
                     <p className="text-xs text-gray-400">{currentUser.role}</p>
                 </div>
             </div>
-            <button 
-                onClick={onUserChange}
-                className="w-full mt-3 px-3 py-1.5 text-xs bg-primary/20 text-accent rounded hover:bg-primary/40 transition-colors focus-visible:focus-visible-ring">
-                Switch User
-            </button>
+            <div className="flex gap-2 mt-3">
+                <button
+                    onClick={onUserChange}
+                    className="flex-1 px-3 py-1.5 text-xs bg-primary/20 text-accent rounded hover:bg-primary/40 transition-colors focus-visible:focus-visible-ring">
+                    Switch User
+                </button>
+                {onLogout && (
+                    <button
+                        onClick={onLogout}
+                        className="flex-1 px-3 py-1.5 text-xs bg-red-500/20 text-red-400 rounded hover:bg-red-500/40 transition-colors focus-visible:focus-visible-ring">
+                        Logout
+                    </button>
+                )}
+            </div>
             <DemoModeToggle isDemoMode={isDemoMode} onToggle={onToggleDemoMode} />
         </div>
 
