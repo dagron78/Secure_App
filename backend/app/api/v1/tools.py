@@ -274,30 +274,23 @@ async def _execute_tool(
     tool: Tool,
     db: AsyncSession
 ):
-    """
-    Execute a tool (background task).
-    This is a placeholder - actual execution would integrate with tool runners.
-    """
+    """Execute a tool using the tool executor service."""
+    from app.services.tool_executor import tool_executor
+    
     try:
         execution.status = ExecutionStatus.RUNNING
         execution.started_at = datetime.utcnow()
         await db.commit()
         
-        # TODO: Integrate with actual tool execution framework
-        # For now, simulate execution
-        import asyncio
-        await asyncio.sleep(1)
+        # Execute tool using the executor service
+        result = await tool_executor.execute(tool, execution, execution.input_data)
         
-        # Mock successful execution
         execution.status = ExecutionStatus.COMPLETED
         execution.completed_at = datetime.utcnow()
         execution.execution_time = (
             execution.completed_at - execution.started_at
         ).total_seconds()
-        execution.output_data = {
-            "result": "Tool executed successfully",
-            "timestamp": datetime.utcnow().isoformat()
-        }
+        execution.output_data = result
         
         # Update tool statistics
         tool.execution_count += 1
@@ -306,7 +299,7 @@ async def _execute_tool(
         # Calculate average execution time
         if tool.avg_execution_time:
             tool.avg_execution_time = (
-                (tool.avg_execution_time * (tool.execution_count - 1) + 
+                (tool.avg_execution_time * (tool.execution_count - 1) +
                  execution.execution_time) / tool.execution_count
             )
         else:
