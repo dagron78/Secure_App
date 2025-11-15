@@ -23,6 +23,8 @@ dependencies = [
     
     # Background Tasks
     "celery>=5.3.6",
+    "kombu>=5.3.5",
+    "flower>=2.0.1",
     
     # Authentication
     "python-jose[cryptography]>=3.3.0",

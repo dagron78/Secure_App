@@ -200,11 +200,31 @@ async def create_admin_user(db: AsyncSession, roles_map: dict[str, Role]):
     admin_user = result.scalar_one_or_none()
     
     if admin_user is None:
+        # Get password from environment or generate secure random
+        import secrets
+        import os
+        
+        admin_password = os.getenv("ADMIN_INITIAL_PASSWORD")
+        
+        if not admin_password:
+            # Generate cryptographically secure random password
+            admin_password = secrets.token_urlsafe(24)
+            print(f"\n{'='*60}")
+            print(f"⚠️  GENERATED ADMIN PASSWORD")
+            print(f"{'='*60}")
+            print(f"  Username: {admin_username}")
+            print(f"  Email:    {admin_email}")
+            print(f"  Password: {admin_password}")
+            print(f"\n  🔐 SAVE THIS PASSWORD - IT WILL NOT BE SHOWN AGAIN!")
+            print(f"{'='*60}\n")
+        else:
+            print(f"  ✓ Using password from ADMIN_INITIAL_PASSWORD env var")
+        
         # Create admin user
         admin_user = User(
             email=admin_email,
             username=admin_username,
-            hashed_password=get_password_hash("admin123"),  # Default password
+            hashed_password=get_password_hash(admin_password),
             full_name="System Administrator",
             is_active=True,
             is_superuser=True,
@@ -219,9 +239,6 @@ async def create_admin_user(db: AsyncSession, roles_map: dict[str, Role]):
         await db.commit()
         
         print(f"  ✓ Created admin user: {admin_email}")
-        print(f"    Username: {admin_username}")
-        print(f"    Password: admin123")
-        print(f"    ⚠️  IMPORTANT: Change this password immediately!")
     else:
         print(f"  • Admin user already exists: {admin_email}")
 

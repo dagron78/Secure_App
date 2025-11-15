@@ -1,13 +1,27 @@
 """FastAPI application entry point."""
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import SQLAlchemyError, IntegrityError
+from pydantic import ValidationError as PydanticValidationError
 
 from app.config import settings
 from app.core.logging import setup_logging
 from app.db.base import init_db, close_db, Base
 from app.services.notification_service import notification_service
+from app.core.exceptions import (
+    CDSAException,
+    DatabaseError,
+    NotFoundError,
+    AuthenticationError,
+    AuthorizationError,
+    ValidationError,
+    ExternalServiceError,
+    RateLimitError,
+    EncryptionError,
+    ConfigurationError
+)
 
 # Import all models to ensure they're registered with Base.metadata
 import app.models  # This imports all models from __init__.py
@@ -127,13 +141,102 @@ async def health_check():
 
 
 # Exception handlers
-@app.exception_handler(Exception)
-async def general_exception_handler(request, exc):
-    """Handle general exceptions."""
-    logger.error(f"Unhandled exception: {exc}", exc_info=True)
+@app.exception_handler(CDSAException)
+async def cdsa_exception_handler(request: Request, exc: CDSAException):
+    """Handle custom CDSA exceptions."""
+    logger.error(
+        f"CDSA Exception: {exc.error_code} - {exc.message}",
+        extra={
+            "error_code": exc.error_code,
+            "status_code": exc.status_code,
+            "details": exc.details,
+            "path": request.url.path
+        }
+    )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": {
+                "code": exc.error_code,
+                "message": exc.message,
+                "details": exc.details
+            }
+        }
+    )
+
+
+@app.exception_handler(IntegrityError)
+async def integrity_error_handler(request: Request, exc: IntegrityError):
+    """Handle database integrity errors."""
+    logger.error(f"Database integrity error: {exc}", exc_info=True)
+    return JSONResponse(
+        status_code=409,
+        content={
+            "error": {
+                "code": "INTEGRITY_ERROR",
+                "message": "Database constraint violation",
+                "details": {"constraint": str(exc.orig) if hasattr(exc, 'orig') else None}
+            }
+        }
+    )
+
+
+@app.exception_handler(SQLAlchemyError)
+async def database_error_handler(request: Request, exc: SQLAlchemyError):
+    """Handle general database errors."""
+    logger.error(f"Database error: {exc}", exc_info=True)
     return JSONResponse(
         status_code=500,
-        content={"detail": "Internal server error"}
+        content={
+            "error": {
+                "code": "DATABASE_ERROR",
+                "message": "Database operation failed",
+                "details": {}
+            }
+        }
+    )
+
+
+@app.exception_handler(PydanticValidationError)
+async def validation_error_handler(request: Request, exc: PydanticValidationError):
+    """Handle Pydantic validation errors."""
+    logger.error(f"Validation error: {exc}", exc_info=True)
+    return JSONResponse(
+        status_code=422,
+        content={
+            "error": {
+                "code": "VALIDATION_ERROR",
+                "message": "Request validation failed",
+                "details": {"errors": exc.errors()}
+            }
+        }
+    )
+
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    """Handle all other exceptions."""
+    logger.error(
+        f"Unhandled exception: {exc}",
+        exc_info=True,
+        extra={"path": request.url.path, "method": request.method}
+    )
+    
+    # Don't expose internal errors in production
+    if settings.is_production:
+        message = "An internal error occurred"
+    else:
+        message = str(exc)
+    
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": {
+                "code": "INTERNAL_ERROR",
+                "message": message,
+                "details": {}
+            }
+        }
     )
 
 

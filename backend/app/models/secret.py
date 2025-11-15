@@ -1,12 +1,17 @@
 """Secrets vault models for secure credential management."""
 from datetime import datetime
 from typing import Optional
+import logging
 
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, Boolean, JSON, Enum as SQLEnum
 from sqlalchemy.orm import relationship
 import enum
 
 from app.db.base import Base
+from app.core.crypto import encrypt_value, decrypt_value
+from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class SecretType(str, enum.Enum):
@@ -70,6 +75,37 @@ class Secret(Base):
     
     def __repr__(self) -> str:
         return f"<Secret(id={self.id}, name={self.name}, type={self.secret_type})>"
+    
+    @property
+    def value(self) -> str:
+        """
+        Decrypt and return secret value.
+        
+        Returns:
+            str: Decrypted secret value
+            
+        Raises:
+            ValueError: If decryption fails
+        """
+        if not self.encrypted_value:
+            return None
+        try:
+            return decrypt_value(self.encrypted_value, settings.ENCRYPTION_KEY)
+        except Exception as e:
+            logger.error(f"Failed to decrypt secret {self.id}: {e}")
+            raise ValueError("Failed to decrypt secret value")
+    
+    @value.setter
+    def value(self, plaintext: str):
+        """
+        Encrypt and store secret value.
+        
+        Args:
+            plaintext: Plaintext value to encrypt and store
+        """
+        if plaintext:
+            self.encrypted_value = encrypt_value(plaintext, settings.ENCRYPTION_KEY)
+            self.encryption_key_id = "fernet_v1"  # Track encryption version
     
     @property
     def is_expired(self) -> bool:

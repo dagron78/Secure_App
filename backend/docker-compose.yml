@@ -65,15 +65,57 @@ services:
   celery_worker:
     build: .
     container_name: cdsa-celery-worker
-    command: celery -A app.tasks worker --loglevel=info
+    command: celery -A app.tasks worker --loglevel=info -Q default,secrets,documents
     environment:
       DATABASE_URL: postgresql+asyncpg://cdsa:changeme@postgres:5432/cdsa_db
       REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/3
+      CELERY_RESULT_BACKEND: redis://redis:6379/3
     env_file:
       - .env
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - cdsa-network
+
+  # Celery Beat Scheduler
+  celery_beat:
+    build: .
+    container_name: cdsa-celery-beat
+    command: celery -A app.tasks beat --loglevel=info
+    environment:
+      DATABASE_URL: postgresql+asyncpg://cdsa:changeme@postgres:5432/cdsa_db
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/3
+      CELERY_RESULT_BACKEND: redis://redis:6379/3
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - cdsa-network
+
+  # Flower - Celery Monitoring
+  flower:
+    build: .
+    container_name: cdsa-flower
+    command: celery -A app.tasks flower --port=5555
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/3
+      CELERY_RESULT_BACKEND: redis://redis:6379/3
+    env_file:
+      - .env
+    ports:
+      - "5555:5555"
+    depends_on:
+      redis:
+        condition: service_healthy
     networks:
       - cdsa-network
 
