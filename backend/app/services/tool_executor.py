@@ -1,4 +1,27 @@
-"""Tool execution service with proper isolation and error handling."""
+"""
+Tool execution service with proper isolation and error handling.
+
+⚠️ SECURITY WARNING - NOT PRODUCTION READY ⚠️
+
+This implementation contains CRITICAL security vulnerabilities:
+
+P0 VULNERABILITIES (Must fix before production):
+1. Arbitrary Code Execution - Python scripts execute without sandboxing
+2. Shell Injection - Command execution uses shell=True equivalent
+3. SSRF Vulnerability - HTTP requests can access internal network
+
+DO NOT DEPLOY TO PRODUCTION until these are resolved.
+See SECURITY_REVIEW.md for full security assessment and hardening plan.
+
+Required for Production:
+- Docker/Firejail sandbox for Python/Shell execution
+- Replace create_subprocess_shell with create_subprocess_exec
+- Implement SSRF protection (IP blocklist + domain allowlist)
+- Add Pydantic-based input validation
+- Implement read-only SQL execution with dedicated user
+
+Estimated hardening time: 5-7 days
+"""
 import asyncio
 import subprocess
 import json
@@ -13,6 +36,12 @@ from app.models.tool import Tool, ToolExecution, ExecutionStatus
 from app.core.exceptions import ValidationError, ExternalServiceError
 
 logger = logging.getLogger(__name__)
+
+# Security warning for production deployments
+logger.warning(
+    "⚠️ SECURITY WARNING: Tool executor is NOT production-ready. "
+    "Contains P0 vulnerabilities. See SECURITY_REVIEW.md for details."
+)
 
 
 class ToolType(str, Enum):
@@ -119,6 +148,15 @@ class ToolExecutor:
         """
         Execute Python script in isolated environment.
         
+        ⚠️ CRITICAL SECURITY VULNERABILITY ⚠️
+        This method executes arbitrary Python code WITHOUT sandboxing.
+        DO NOT USE IN PRODUCTION until sandboxing is implemented.
+        
+        Required Fix:
+        - Execute in isolated Docker container (no network, minimal image)
+        - Alternative: Firejail, gVisor, or Kata Containers
+        - Set resource limits (CPU, memory, disk, timeout)
+        
         Args:
             tool: Tool instance
             input_data: Input parameters
@@ -126,7 +164,10 @@ class ToolExecutor:
         Returns:
             dict: Execution result
         """
-        logger.info(f"Executing Python script: {tool.name}")
+        logger.warning(
+            f"⚠️ EXECUTING UNSANDBOXED PYTHON CODE for tool: {tool.name}. "
+            "This is a CRITICAL security risk in production!"
+        )
         
         script = tool.config.get("script", "")
         if not script:
