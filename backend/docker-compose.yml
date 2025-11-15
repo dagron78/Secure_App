@@ -38,6 +38,25 @@ services:
     networks:
       - cdsa-network
 
+  # Database Migrations (run once before API starts)
+  migrations:
+    build: .
+    container_name: cdsa-migrations
+    command: /app/scripts/run_migrations.sh
+    environment:
+      DATABASE_URL: postgresql+asyncpg://cdsa:changeme@postgres:5432/cdsa_db
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_USER: cdsa
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - cdsa-network
+    restart: "no"
+
   # FastAPI Application
   api:
     build: .
@@ -58,6 +77,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
     networks:
       - cdsa-network
 

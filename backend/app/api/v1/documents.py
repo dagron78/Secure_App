@@ -7,7 +7,7 @@ from typing import List, Optional
 from datetime import datetime
 import io
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_, desc
 
@@ -38,6 +38,7 @@ from app.schemas.document import (
 from app.services.document_processor import document_processor
 from app.services.chunking_service import chunking_service
 from app.services.embedding_service import get_embedding_service
+from app.core.cache import cached, cache_invalidate
 
 logger = logging.getLogger(__name__)
 
@@ -47,8 +48,8 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 # Document Management Endpoints
 
 @router.post("/upload", response_model=DocumentResponse)
+@cache_invalidate("documents:list")
 async def upload_document(
-    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     title: Optional[str] = None,
     tags: Optional[str] = Query(None, description="Comma-separated tags"),
@@ -62,7 +63,12 @@ async def upload_document(
     Upload a document file.
     
     Supported formats: PDF, DOCX, PPTX, HTML, MD, TXT, and images.
+    
+    If auto_index=True, document processing is queued as a Celery task
+    for asynchronous processing with status tracking.
     """
+    from app.tasks import process_document as process_document_task
+    
     try:
         # Validate file type
         file_ext = file.filename.split('.')[-1].lower() if '.' in file.filename else ''
@@ -92,15 +98,17 @@ async def upload_document(
         db.add(document)
         db.flush()
         
-        # Process document in background
+        # Queue document processing with Celery
         if auto_index:
-            background_tasks.add_task(
-                process_and_index_document,
+            task = process_document_task.delay(
                 document.id,
                 file_bytes,
                 file.filename,
-                file_ext,
-                db
+                file_ext
+            )
+            logger.info(
+                f"Queued document processing for document {document.id}, "
+                f"task_id: {task.id}"
             )
         
         db.commit()
@@ -112,7 +120,11 @@ async def upload_document(
             action="document.upload",
             resource_type="document",
             resource_id=document.id,
-            details={"filename": file.filename, "size": file_size}
+            details={
+                "filename": file.filename,
+                "size": file_size,
+                "auto_index": auto_index
+            }
         )
         db.add(audit)
         db.commit()
@@ -127,12 +139,17 @@ async def upload_document(
 
 
 @router.get("/{document_id}", response_model=DocumentResponse)
-def get_document(
+@cached(ttl=300, key_prefix="documents:get")
+async def get_document(
     document_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Get document by ID."""
+    """
+    Get document by ID.
+    
+    Results are cached for 5 minutes.
+    """
     document = db.query(Document).filter(Document.id == document_id).first()
     
     if not document:
@@ -151,7 +168,8 @@ def get_document(
 
 
 @router.get("/", response_model=DocumentListResponse)
-def list_documents(
+@cached(ttl=60, key_prefix="documents:list")
+async def list_documents(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     search: Optional[str] = None,
@@ -161,7 +179,11 @@ def list_documents(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """List documents with pagination and filters."""
+    """
+    List documents with pagination and filters.
+    
+    Results are cached for 60 seconds to improve performance.
+    """
     query = db.query(Document)
     
     # Filter by access (public or owned)
@@ -638,76 +660,70 @@ def get_document_statistics(
     }
 
 
-# Helper Functions
-
-async def process_and_index_document(
+@router.get("/{document_id}/processing-status")
+def get_processing_status(
     document_id: int,
-    file_bytes: bytes,
-    filename: str,
-    file_type: str,
-    db: Session
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
-    """Background task to process and index document."""
-    try:
-        document = db.query(Document).filter(Document.id == document_id).first()
-        if not document:
-            return
-        
-        # Process document
-        result = document_processor.process_from_bytes(file_bytes, filename, file_type)
-        
-        if not result["success"]:
-            document.processing_error = result["error"]
-            document.is_processed = False
-            db.commit()
-            return
-        
-        # Update document
-        document.is_processed = True
-        document.meta_data = result["metadata"]
-        db.commit()
-        
-        # Create chunks
-        chunks = chunking_service.chunk_document(
-            result["text"],
-            result["structure"],
-            result["tables"],
-            result["images"],
-            result["metadata"]
-        )
-        
-        # Generate embeddings
-        chunk_texts = [c["content"] for c in chunks]
-        embedding_service = get_embedding_service()
-        embeddings = await embedding_service.generate_embeddings(chunk_texts)
-        
-        # Save chunks with embeddings
-        for idx, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
-            db_chunk = DocumentChunk(
-                document_id=document_id,
-                chunk_index=idx,
-                content=chunk["content"],
-                embedding=embedding,
-                token_count=chunk["meta_data"].get("token_count"),
-                char_count=chunk["meta_data"].get("char_count"),
-                meta_data=chunk["meta_data"],
-                search_keywords=chunk["search_keywords"]
-            )
-            db.add(db_chunk)
-        
-        # Update document
-        document.chunk_count = len(chunks)
-        document.is_indexed = True
-        db.commit()
-        
-        logger.info(f"Successfully indexed document {document_id} with {len(chunks)} chunks")
-        
-    except Exception as e:
-        logger.error(f"Error processing document {document_id}: {str(e)}", exc_info=True)
-        document = db.query(Document).filter(Document.id == document_id).first()
-        if document:
-            document.processing_error = str(e)
-            db.commit()
+    """
+    Get the processing status of a document.
+    
+    Returns information about whether the document has been processed,
+    indexed, and any errors that occurred.
+    """
+    document = db.query(Document).filter(Document.id == document_id).first()
+    
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    # Check permissions
+    if not document.is_public and document.uploaded_by != current_user.id:
+        if document.required_permission:
+            require_permissions([document.required_permission])(current_user)
+    
+    return {
+        "document_id": document.id,
+        "is_processed": document.is_processed,
+        "is_indexed": document.is_indexed,
+        "chunk_count": document.chunk_count,
+        "processing_error": document.processing_error,
+        "created_at": document.created_at,
+        "updated_at": document.updated_at
+    }
+
+
+@router.post("/{document_id}/reindex")
+def reindex_document(
+    document_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Reindex an already uploaded document.
+    
+    Useful for re-processing documents with updated chunking or embedding strategies.
+    """
+    from app.tasks import process_document as process_document_task
+    
+    document = db.query(Document).filter(Document.id == document_id).first()
+    
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    # Check permissions - only owner or admin can reindex
+    if document.uploaded_by != current_user.id and not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Not authorized to reindex this document")
+    
+    # TODO: In production, we'd need to fetch the original file from storage
+    # For now, return an error if we don't have the file bytes
+    raise HTTPException(
+        status_code=501,
+        detail="Reindexing requires file storage implementation"
+    )
+
+
+# Helper Functions
 
 
 async def vector_search(

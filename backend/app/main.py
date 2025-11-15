@@ -10,6 +10,7 @@ from app.config import settings
 from app.core.logging import setup_logging
 from app.db.base import init_db, close_db, Base
 from app.services.notification_service import notification_service
+from app.core.cache import cache_manager
 from app.core.exceptions import (
     CDSAException,
     DatabaseError,
@@ -54,6 +55,13 @@ async def lifespan(app: FastAPI):
             # Don't raise - allow app to continue if tables already exist
             logger.info("Tables may already exist, continuing...")
         
+        # Initialize cache manager
+        try:
+            await cache_manager.connect()
+            logger.info("✓ Cache manager initialized")
+        except Exception as e:
+            logger.warning(f"Cache not available: {e}")
+        
         # Initialize Redis connection (optional, for notifications pub/sub)
         try:
             import redis.asyncio as redis
@@ -83,6 +91,10 @@ async def lifespan(app: FastAPI):
         # Stop notification service
         await notification_service.stop_redis_listener()
         logger.info("✓ Notification service stopped")
+        
+        # Disconnect cache manager
+        await cache_manager.disconnect()
+        logger.info("✓ Cache manager disconnected")
         
         # Close database connections
         await close_db()
@@ -138,6 +150,13 @@ async def health_check():
             "llm": "pending",
         }
     }
+
+
+@app.get("/cache/stats")
+async def cache_stats():
+    """Get cache statistics."""
+    from app.core.cache import get_cache_stats
+    return await get_cache_stats()
 
 
 # Exception handlers

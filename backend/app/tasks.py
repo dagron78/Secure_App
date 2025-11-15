@@ -173,32 +173,185 @@ def cleanup_expired_secrets():
         session.close()
 
 
-@celery.task(name='app.tasks.process_document', bind=True)
-def process_document(self, document_id: int, file_path: str = None):
+@celery.task(name='app.tasks.process_document', bind=True, max_retries=3)
+def process_document(
+    self,
+    document_id: int,
+    file_bytes: bytes,
+    filename: str,
+    file_type: str
+):
     """
-    Process and index a document in background.
+    Process and index a document in background using Celery.
+    
+    This task:
+    1. Processes the document using Docling (extracts text, tables, images)
+    2. Chunks the content using chunking service
+    3. Generates embeddings for each chunk
+    4. Stores chunks with embeddings in the database
+    5. Updates document status throughout the process
     
     Args:
         document_id: ID of the document to process
-        file_path: Optional path to the document file
+        file_bytes: Raw bytes of the uploaded file
+        filename: Original filename
+        file_type: File extension (pdf, docx, etc.)
         
     Returns:
-        dict: Result of the processing operation
+        dict: Result of the processing operation with statistics
     """
-    logger.info(f"Processing document {document_id}")
+    from app.services.document_processor import document_processor
+    from app.services.chunking_service import chunking_service
+    from app.services.embedding_service import get_embedding_service
+    from app.models.document import Document, DocumentChunk
+    from app.models.audit import AuditLog
+    import asyncio
+    
+    logger.info(f"Starting Celery task to process document {document_id}")
+    
+    session_factory = get_session_factory()
+    session = session_factory()
     
     try:
-        # TODO: Implement document processing
-        # This would include:
-        # 1. Load document from storage
-        # 2. Extract text content
-        # 3. Chunk the content
-        # 4. Generate embeddings
-        # 5. Store in vector database
+        # Get document from database
+        document = session.get(Document, document_id)
+        if not document:
+            logger.error(f"Document {document_id} not found")
+            return {"success": False, "error": "Document not found"}
         
+        # Update status to processing
+        document.is_processed = False
+        document.processing_error = None
+        session.commit()
+        
+        # Step 1: Process document with Docling
+        logger.info(f"Processing document {document_id} with Docling")
+        result = document_processor.process_from_bytes(file_bytes, filename, file_type)
+        
+        if not result["success"]:
+            document.processing_error = result["error"]
+            document.is_processed = False
+            session.commit()
+            logger.error(f"Document processing failed: {result['error']}")
+            return {
+                "success": False,
+                "error": result["error"],
+                "document_id": document_id
+            }
+        
+        # Update document with processing results
+        document.is_processed = True
+        document.meta_data = result["metadata"]
+        session.commit()
         logger.info(f"Document {document_id} processed successfully")
-        return {"success": True, "document_id": document_id}
+        
+        # Step 2: Create chunks
+        logger.info(f"Chunking document {document_id}")
+        chunks = chunking_service.chunk_document(
+            result["text"],
+            result["structure"],
+            result["tables"],
+            result["images"],
+            result["metadata"]
+        )
+        logger.info(f"Created {len(chunks)} chunks for document {document_id}")
+        
+        # Step 3: Generate embeddings (async operation)
+        logger.info(f"Generating embeddings for {len(chunks)} chunks")
+        chunk_texts = [c["content"] for c in chunks]
+        embedding_service = get_embedding_service()
+        
+        # Run async embedding generation in event loop
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            embeddings = loop.run_until_complete(
+                embedding_service.generate_embeddings(chunk_texts)
+            )
+        finally:
+            loop.close()
+        
+        logger.info(f"Generated {len(embeddings)} embeddings")
+        
+        # Step 4: Save chunks with embeddings to database
+        logger.info(f"Saving chunks to database")
+        for idx, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
+            db_chunk = DocumentChunk(
+                document_id=document_id,
+                chunk_index=idx,
+                content=chunk["content"],
+                embedding=embedding,
+                token_count=chunk["meta_data"].get("token_count"),
+                char_count=chunk["meta_data"].get("char_count"),
+                meta_data=chunk["meta_data"],
+                search_keywords=chunk["search_keywords"]
+            )
+            session.add(db_chunk)
+        
+        # Step 5: Update document final status
+        document.chunk_count = len(chunks)
+        document.is_indexed = True
+        session.commit()
+        
+        # Create audit log
+        audit = AuditLog(
+            user_id=document.uploaded_by,
+            action="document.index_complete",
+            resource_type="document",
+            resource_id=document.id,
+            details={
+                "chunk_count": len(chunks),
+                "processing_time": result["processing_time"],
+                "page_count": result["page_count"],
+                "char_count": result["char_count"]
+            },
+            success=True
+        )
+        session.add(audit)
+        session.commit()
+        
+        logger.info(
+            f"Successfully indexed document {document_id} with {len(chunks)} chunks "
+            f"in {result['processing_time']:.2f}s"
+        )
+        
+        return {
+            "success": True,
+            "document_id": document_id,
+            "chunk_count": len(chunks),
+            "processing_time": result["processing_time"],
+            "page_count": result["page_count"],
+            "char_count": result["char_count"]
+        }
         
     except Exception as exc:
-        logger.error(f"Error processing document {document_id}: {exc}")
-        raise self.retry(exc=exc, countdown=60)
+        logger.error(f"Error processing document {document_id}: {exc}", exc_info=True)
+        
+        # Update document with error
+        try:
+            document = session.get(Document, document_id)
+            if document:
+                document.processing_error = str(exc)
+                document.is_processed = False
+                document.is_indexed = False
+                
+                # Create audit log for failure
+                audit = AuditLog(
+                    user_id=document.uploaded_by,
+                    action="document.index_failed",
+                    resource_type="document",
+                    resource_id=document.id,
+                    details={"error": str(exc)},
+                    success=False,
+                    error_message=str(exc)
+                )
+                session.add(audit)
+                session.commit()
+        except Exception as e:
+            logger.error(f"Error updating document status: {e}")
+        
+        # Retry with exponential backoff
+        raise self.retry(exc=exc, countdown=60 * (self.request.retries + 1))
+        
+    finally:
+        session.close()
