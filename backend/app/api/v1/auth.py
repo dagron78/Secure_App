@@ -3,7 +3,9 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, or_, update
+from sqlalchemy.orm import selectinload
 
 from app.config import settings
 from app.core.deps import get_current_user, get_current_superuser, get_db
@@ -29,9 +31,9 @@ router = APIRouter()
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
-def register(
+async def register(
     user_data: UserCreate,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> Any:
     """Register a new user.
     
@@ -46,14 +48,16 @@ def register(
         HTTPException: If username or email already exists
     """
     # Check if username exists
-    if db.query(User).filter(User.username == user_data.username).first():
+    result = await db.execute(select(User).where(User.username == user_data.username))
+    if result.scalar_one_or_none():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Username already registered",
         )
     
     # Check if email exists
-    if db.query(User).filter(User.email == user_data.email).first():
+    result = await db.execute(select(User).where(User.email == user_data.email))
+    if result.scalar_one_or_none():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Email already registered",
@@ -71,16 +75,16 @@ def register(
     )
     
     db.add(user)
-    db.commit()
-    db.refresh(user)
+    await db.commit()
+    await db.refresh(user)
     
     return user
 
 
 @router.post("/login", response_model=TokenResponse)
-def login(
+async def login(
     login_data: LoginRequest,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> Any:
     """Authenticate user and return access and refresh tokens.
     
@@ -94,42 +98,60 @@ def login(
     Raises:
         HTTPException: If credentials are invalid
     """
-    # Try to find user by username or email
-    user = db.query(User).filter(
-        (User.username == login_data.username) | (User.email == login_data.username)
-    ).first()
+    # Try to find user by username or email - query specific columns only
+    result = await db.execute(
+        select(User.id, User.username, User.email, User.hashed_password, User.is_active).where(
+            or_(User.username == login_data.username, User.email == login_data.username)
+        )
+    )
+    row = result.one_or_none()
     
-    if not user or not verify_password(login_data.password, user.hashed_password):
+    if not row:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    if not user.is_active:
+    user_id, username, email, hashed_password, is_active = row
+    
+    if not verify_password(login_data.password, hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    if not is_active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Inactive user",
         )
     
-    # Update last login
-    user.last_login = datetime.utcnow()
-    db.commit()
+    # Store user_id as string (for UUID compatibility)
+    user_id_str = str(user_id)
     
     # Create tokens
-    access_token = create_access_token(subject=user.id)
-    refresh_token = create_refresh_token(subject=user.id)
+    access_token = create_access_token(subject=user_id_str)
+    refresh_token = create_refresh_token(subject=user_id_str)
     
-    # Create session record
+    # Update last login
+    await db.execute(
+        update(User)
+        .where(User.id == user_id)
+        .values(last_login=datetime.utcnow())
+    )
+    
+    # Create session record for token rotation and logout
     session = UserSession(
-        user_id=user.id,
+        user_id=user_id,
         token=access_token,
         refresh_token=refresh_token,
         is_active=True,
         expires_at=datetime.utcnow() + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
     )
     db.add(session)
-    db.commit()
+    await db.commit()
     
     return {
         "access_token": access_token,
@@ -140,9 +162,9 @@ def login(
 
 
 @router.post("/refresh", response_model=TokenResponse)
-def refresh_token(
+async def refresh_token(
     refresh_data: RefreshTokenRequest,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> Any:
     """Refresh access token using refresh token.
     
@@ -166,7 +188,8 @@ def refresh_token(
         )
     
     # Get user
-    user = db.query(User).filter(User.id == int(user_id)).first()
+    result = await db.execute(select(User).where(User.id == int(user_id)))
+    user = result.scalar_one_or_none()
     if not user or not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -174,12 +197,13 @@ def refresh_token(
         )
     
     # Invalidate old session
-    old_session = db.query(UserSession).filter(
-        UserSession.refresh_token == refresh_data.refresh_token
-    ).first()
+    result = await db.execute(
+        select(UserSession).where(UserSession.refresh_token == refresh_data.refresh_token)
+    )
+    old_session = result.scalar_one_or_none()
     if old_session:
         old_session.is_active = False
-        db.commit()
+        await db.commit()
     
     # Create new tokens
     access_token = create_access_token(subject=user.id)
@@ -194,7 +218,7 @@ def refresh_token(
         expires_at=datetime.utcnow() + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
     )
     db.add(session)
-    db.commit()
+    await db.commit()
     
     return {
         "access_token": access_token,
@@ -205,9 +229,9 @@ def refresh_token(
 
 
 @router.post("/logout")
-def logout(
+async def logout(
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> Any:
     """Logout current user by invalidating their sessions.
     
@@ -219,17 +243,22 @@ def logout(
         Success message
     """
     # Invalidate all active sessions for this user
-    db.query(UserSession).filter(
-        UserSession.user_id == current_user.id,
-        UserSession.is_active == True
-    ).update({"is_active": False})
-    db.commit()
+    result = await db.execute(
+        select(UserSession).where(
+            UserSession.user_id == current_user.id,
+            UserSession.is_active == True
+        )
+    )
+    sessions = result.scalars().all()
+    for session in sessions:
+        session.is_active = False
+    await db.commit()
     
     return {"message": "Successfully logged out"}
 
 
 @router.get("/me", response_model=UserWithRoles)
-def get_current_user_info(
+async def get_current_user_info(
     current_user: User = Depends(get_current_user),
 ) -> Any:
     """Get current user information with roles and permissions.
@@ -248,10 +277,10 @@ def get_current_user_info(
 
 
 @router.put("/me", response_model=UserResponse)
-def update_current_user(
+async def update_current_user(
     update_data: dict[str, Any],
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> Any:
     """Update current user information.
     
@@ -268,7 +297,8 @@ def update_current_user(
     """
     # Check if username is being changed and if it already exists
     if "username" in update_data and update_data["username"] != current_user.username:
-        if db.query(User).filter(User.username == update_data["username"]).first():
+        result = await db.execute(select(User).where(User.username == update_data["username"]))
+        if result.scalar_one_or_none():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Username already taken",
@@ -276,7 +306,8 @@ def update_current_user(
     
     # Check if email is being changed and if it already exists
     if "email" in update_data and update_data["email"] != current_user.email:
-        if db.query(User).filter(User.email == update_data["email"]).first():
+        result = await db.execute(select(User).where(User.email == update_data["email"]))
+        if result.scalar_one_or_none():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Email already registered",
@@ -289,17 +320,17 @@ def update_current_user(
             setattr(current_user, field, update_data[field])
     
     current_user.updated_at = datetime.utcnow()
-    db.commit()
-    db.refresh(current_user)
+    await db.commit()
+    await db.refresh(current_user)
     
     return current_user
 
 
 @router.post("/change-password")
-def change_password(
+async def change_password(
     password_data: PasswordChange,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> Any:
     """Change current user's password.
     
@@ -326,22 +357,27 @@ def change_password(
     current_user.updated_at = datetime.utcnow()
     
     # Invalidate all sessions (force re-login)
-    db.query(UserSession).filter(
-        UserSession.user_id == current_user.id,
-        UserSession.is_active == True
-    ).update({"is_active": False})
+    result = await db.execute(
+        select(UserSession).where(
+            UserSession.user_id == current_user.id,
+            UserSession.is_active == True
+        )
+    )
+    sessions = result.scalars().all()
+    for session in sessions:
+        session.is_active = False
     
-    db.commit()
+    await db.commit()
     
     return {"message": "Password changed successfully. Please login again."}
 
 
 @router.get("/users", response_model=list[UserResponse])
-def list_users(
+async def list_users(
     skip: int = 0,
     limit: int = 100,
     current_user: User = Depends(get_current_superuser),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> Any:
     """List all users (superuser only).
     
@@ -354,15 +390,16 @@ def list_users(
     Returns:
         List of users
     """
-    users = db.query(User).offset(skip).limit(limit).all()
+    result = await db.execute(select(User).offset(skip).limit(limit))
+    users = result.scalars().all()
     return users
 
 
 @router.get("/users/{user_id}", response_model=UserWithRoles)
-def get_user(
+async def get_user(
     user_id: int,
     current_user: User = Depends(get_current_superuser),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> Any:
     """Get user by ID (superuser only).
     
@@ -377,7 +414,8 @@ def get_user(
     Raises:
         HTTPException: If user not found
     """
-    user = db.query(User).filter(User.id == user_id).first()
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

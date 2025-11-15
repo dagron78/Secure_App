@@ -5,13 +5,16 @@ from typing import Optional
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, Boolean, JSON, Float
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import ARRAY
-try:
-    from pgvector.sqlalchemy import Vector
-except ImportError:
-    # Fallback if pgvector not installed
-    from sqlalchemy import Text as Vector
 
 from app.db.base import Base
+
+# Try to import pgvector, use Text fallback if not available
+try:
+    from pgvector.sqlalchemy import Vector
+    VECTOR_AVAILABLE = True
+except ImportError:
+    VECTOR_AVAILABLE = False
+    Vector = None
 
 
 class Document(Base):
@@ -80,7 +83,10 @@ class DocumentChunk(Base):
     
     # Vector embedding (for semantic search)
     # Supports various embedding dimensions: 384 (MiniLM), 768 (BERT), 1536 (OpenAI), 3072 (text-embedding-3-large)
-    embedding = Column(Vector(1536), nullable=True)  # Default to OpenAI embedding size
+    if VECTOR_AVAILABLE:
+        embedding = Column(Vector(1536), nullable=True)  # Default to OpenAI embedding size
+    else:
+        embedding = Column(Text, nullable=True)  # Fallback to TEXT when pgvector not installed
     
     # Chunk metadata
     token_count = Column(Integer, nullable=True)
@@ -110,7 +116,10 @@ class SearchResult(Base):
     
     # Query details
     query = Column(Text, nullable=False, index=True)
-    query_embedding = Column(Vector(1536), nullable=True)
+    if VECTOR_AVAILABLE:
+        query_embedding = Column(Vector(1536), nullable=True)
+    else:
+        query_embedding = Column(Text, nullable=True)  # Fallback to TEXT when pgvector not installed
     
     # Result details
     chunk_id = Column(Integer, ForeignKey('document_chunks.id', ondelete='CASCADE'), nullable=False, index=True)

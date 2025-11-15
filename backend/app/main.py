@@ -6,8 +6,11 @@ from fastapi.responses import JSONResponse
 
 from app.config import settings
 from app.core.logging import setup_logging
-from app.db.base import init_db, close_db
+from app.db.base import init_db, close_db, Base
 from app.services.notification_service import notification_service
+
+# Import all models to ensure they're registered with Base.metadata
+import app.models  # This imports all models from __init__.py
 
 # Setup logging
 logger = setup_logging()
@@ -25,6 +28,17 @@ async def lifespan(app: FastAPI):
         logger.info("Initializing database connection...")
         engine, session_factory = init_db()
         logger.info("✓ Database connection initialized")
+        
+        # Create database tables
+        logger.info("Creating database tables...")
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+            logger.info("✓ Database tables created successfully")
+        except Exception as e:
+            logger.error(f"Failed to create database tables: {e}")
+            # Don't raise - allow app to continue if tables already exist
+            logger.info("Tables may already exist, continuing...")
         
         # Initialize Redis connection (optional, for notifications pub/sub)
         try:

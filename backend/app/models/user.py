@@ -45,10 +45,10 @@ class User(Base):
     last_login = Column(DateTime, nullable=True)
     
     # Relationships
-    roles = relationship("Role", secondary=user_roles, back_populates="users", lazy="joined")
+    roles = relationship("Role", secondary=user_roles, back_populates="users", lazy="select")
     sessions = relationship("Session", back_populates="user", cascade="all, delete-orphan")
     chat_messages = relationship("ChatMessage", back_populates="user", cascade="all, delete-orphan")
-    tool_approvals = relationship("ToolApproval", back_populates="user", cascade="all, delete-orphan")
+    tool_approvals = relationship("ToolApproval", back_populates="user", foreign_keys="ToolApproval.requested_by", cascade="all, delete-orphan")
     audit_logs = relationship("AuditLog", back_populates="user", cascade="all, delete-orphan")
     notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan")
     notification_preferences = relationship("NotificationPreference", back_populates="user", cascade="all, delete-orphan")
@@ -93,7 +93,7 @@ class Role(Base):
     
     # Relationships
     users = relationship("User", secondary=user_roles, back_populates="roles")
-    permissions = relationship("Permission", secondary=role_permissions, back_populates="roles", lazy="joined")
+    permissions = relationship("Permission", secondary=role_permissions, back_populates="roles", lazy="select")
     
     def __repr__(self) -> str:
         return f"<Role(id={self.id}, name={self.name})>"
@@ -127,8 +127,8 @@ class Session(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True)
-    token = Column(String(255), unique=True, nullable=False, index=True)
-    refresh_token = Column(String(255), unique=True, nullable=True, index=True)
+    token = Column(String(1024), unique=True, nullable=False, index=True)
+    refresh_token = Column(String(1024), unique=True, nullable=True, index=True)
     
     # Session metadata
     ip_address = Column(String(45))  # IPv6 compatible

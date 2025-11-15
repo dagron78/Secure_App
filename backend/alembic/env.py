@@ -12,7 +12,9 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from app.config import settings
 from app.db.base import Base
-from app.models import *  # Import all models to ensure they're registered
+
+# Don't import models during migrations - we use explicit SQL instead
+# from app.models import *  # Import all models to ensure they're registered
 
 # Alembic Config object
 config = context.config
@@ -25,7 +27,9 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 # Override sqlalchemy.url from config with our settings
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+# Convert asyncpg URL to psycopg2 for synchronous migrations
+database_url = settings.DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://")
+config.set_main_option("sqlalchemy.url", database_url)
 
 
 def run_migrations_offline() -> None:

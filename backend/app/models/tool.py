@@ -128,7 +128,7 @@ class ToolExecution(Base):
     tool = relationship("Tool", back_populates="executions")
     user = relationship("User")
     session = relationship("ChatSession")
-    approval = relationship("ToolApproval", back_populates="execution", foreign_keys=[approval_id])
+    approval = relationship("ToolApproval", back_populates="execution", foreign_keys=[approval_id], uselist=False)
     chat_messages = relationship("ChatMessage", back_populates="tool_execution", foreign_keys="ChatMessage.tool_execution_id")
     audit_logs = relationship("AuditLog", back_populates="tool_execution")
     
@@ -172,7 +172,7 @@ class ToolApproval(Base):
     expires_at = Column(DateTime, nullable=True)  # Approval request expiration
     
     # Relationships
-    execution = relationship("ToolExecution", back_populates="approval", foreign_keys=[execution_id])
+    execution = relationship("ToolExecution", foreign_keys=[execution_id])
     user = relationship("User", foreign_keys=[requested_by], back_populates="tool_approvals")
     approver = relationship("User", foreign_keys=[approved_by])
     

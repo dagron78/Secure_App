@@ -49,7 +49,10 @@ class Settings(BaseSettings):
     SECRET_KEY: str = Field(..., description="Secret key for signing")
     JWT_SECRET_KEY: str = Field(..., description="JWT secret key")
     JWT_ALGORITHM: str = "HS256"
+    ALGORITHM: str = "HS256"  # Alias for JWT_ALGORITHM
     JWT_EXPIRATION_MINUTES: int = 60
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60  # Alias for JWT_EXPIRATION_MINUTES
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     ENCRYPTION_KEY: str = Field(..., description="Encryption key for vault")
     
     # Rate Limiting

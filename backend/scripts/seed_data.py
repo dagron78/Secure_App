@@ -130,9 +130,16 @@ async def create_permissions(db: AsyncSession) -> dict[str, Permission]:
         permission = result.scalar_one_or_none()
         
         if permission is None:
+            # Parse resource and action from name (e.g., "users:create" -> resource="users", action="create")
+            parts = perm_data["name"].split(":")
+            resource = parts[0] if len(parts) > 0 else "unknown"
+            action = parts[1] if len(parts) > 1 else "execute"
+            
             permission = Permission(
                 name=perm_data["name"],
-                description=perm_data["description"]
+                description=perm_data["description"],
+                resource=resource,
+                action=action
             )
             db.add(permission)
             print(f"  ✓ Created permission: {perm_data['name']}")
@@ -155,7 +162,7 @@ async def create_roles(db: AsyncSession, permissions_map: dict[str, Permission])
         result = await db.execute(
             select(Role).where(Role.name == role_name)
         )
-        role = result.scalar_one_or_none()
+        role = result.unique().scalar_one_or_none()
         
         if role is None:
             role = Role(

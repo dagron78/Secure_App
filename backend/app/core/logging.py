@@ -60,3 +60,44 @@ def setup_logging() -> structlog.BoundLogger:
     )
     
     return structlog.get_logger()
+
+
+def log_api_call(func):
+    """Decorator to log API calls with timing information."""
+    import functools
+    import time
+    
+    @functools.wraps(func)
+    async def wrapper(*args, **kwargs):
+        logger = structlog.get_logger()
+        start_time = time.time()
+        
+        # Get function info
+        func_name = func.__name__
+        
+        try:
+            result = await func(*args, **kwargs)
+            duration = time.time() - start_time
+            
+            logger.info(
+                "api_call_completed",
+                function=func_name,
+                duration_seconds=round(duration, 3),
+                status="success"
+            )
+            
+            return result
+            
+        except Exception as e:
+            duration = time.time() - start_time
+            
+            logger.error(
+                "api_call_failed",
+                function=func_name,
+                duration_seconds=round(duration, 3),
+                error=str(e),
+                status="error"
+            )
+            raise
+    
+    return wrapper

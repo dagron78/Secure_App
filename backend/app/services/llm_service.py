@@ -2,6 +2,7 @@
 LLM Service for unified interface to multiple AI providers.
 Supports OpenAI, Anthropic, Google Gemini, and local Ollama models.
 """
+import os
 import logging
 from typing import List, Dict, Any, Optional, AsyncIterator
 from datetime import datetime
@@ -288,10 +289,18 @@ class LLMService:
     
     def __init__(self):
         self.providers: Dict[str, LLMProvider] = {}
-        self._initialize_providers()
+        self._initialized = False
+        # Only initialize if not explicitly skipped (for migrations, CLI tools, etc.)
+        if not os.getenv('SKIP_LLM_INIT'):
+            self._initialize_providers()
     
     def _initialize_providers(self):
         """Initialize available LLM providers."""
+        if self._initialized:
+            return
+            
+        self._initialized = True
+        
         # OpenAI models
         if settings.OPENAI_API_KEY:
             self.providers["gpt-4"] = OpenAIProvider("gpt-4-turbo-preview")
