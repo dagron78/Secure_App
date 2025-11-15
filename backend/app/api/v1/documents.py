@@ -718,10 +718,87 @@ async def vector_search(
     user_id: int,
     db: Session
 ) -> List[dict]:
-    """Perform vector similarity search."""
-    # This would use pgvector's <-> operator in production
-    # For now, return empty list as placeholder
-    return []
+    """
+    Perform vector similarity search using pgvector.
+    
+    Uses cosine distance (<=> operator) for similarity calculation.
+    Returns chunks ranked by relevance score (1 - cosine_distance).
+    """
+    from sqlalchemy import text
+    
+    # Build base query with pgvector operators
+    query = """
+        SELECT
+            dc.id as chunk_id,
+            dc.document_id,
+            dc.content,
+            dc.chunk_index,
+            dc.token_count,
+            dc.meta_data as chunk_metadata,
+            d.title as document_title,
+            d.source as document_source,
+            d.tags as document_tags,
+            1 - (dc.embedding <=> :query_embedding::vector) as similarity_score
+        FROM document_chunks dc
+        JOIN documents d ON dc.document_id = d.id
+        WHERE
+            dc.embedding IS NOT NULL
+            AND (d.is_public = true OR d.uploaded_by = :user_id)
+    """
+    
+    # Add minimum score filter if provided
+    if min_score is not None:
+        query += " AND (1 - (dc.embedding <=> :query_embedding::vector)) >= :min_score"
+    
+    # Add custom filters
+    params = {
+        'query_embedding': str(query_embedding),
+        'user_id': user_id,
+        'top_k': top_k
+    }
+    
+    if min_score is not None:
+        params['min_score'] = min_score
+    
+    if filters:
+        if filters.get('document_ids'):
+            query += " AND dc.document_id = ANY(:document_ids)"
+            params['document_ids'] = filters['document_ids']
+        if filters.get('tags'):
+            query += " AND d.tags && :tags"
+            params['tags'] = filters['tags']
+    
+    # Order by similarity and limit results
+    query += """
+        ORDER BY dc.embedding <=> :query_embedding::vector
+        LIMIT :top_k
+    """
+    
+    # Execute query
+    try:
+        result = db.execute(text(query), params)
+        
+        # Format results
+        results = []
+        for row in result:
+            results.append({
+                "chunk_id": row.chunk_id,
+                "document_id": row.document_id,
+                "content": row.content,
+                "chunk_index": row.chunk_index,
+                "document_title": row.document_title,
+                "document_source": row.document_source,
+                "document_tags": row.document_tags,
+                "similarity_score": float(row.similarity_score),
+                "metadata": row.chunk_metadata or {}
+            })
+        
+        return results
+        
+    except Exception as e:
+        logger.error(f"Vector search error: {e}")
+        # Return empty list if vector search fails (pgvector might not be installed)
+        return []
 
 
 async def keyword_search(
