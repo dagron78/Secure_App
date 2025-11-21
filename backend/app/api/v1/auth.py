@@ -2,7 +2,7 @@
 from datetime import datetime, timedelta
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_, update
 from sqlalchemy.orm import selectinload
@@ -37,6 +37,7 @@ router = APIRouter()
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 @auth_rate_limit()
 async def register(
+    request: Request,
     user_data: UserCreate,
     db: AsyncSession = Depends(get_db),
 ) -> Any:
@@ -89,6 +90,7 @@ async def register(
 @router.post("/login", response_model=TokenResponse)
 @auth_rate_limit()
 async def login(
+    request: Request,
     login_data: LoginRequest,
     db: AsyncSession = Depends(get_db),
 ) -> Any:
@@ -185,6 +187,7 @@ async def login(
 @router.post("/refresh", response_model=TokenResponse)
 @auth_rate_limit()
 async def refresh_token(
+    request: Request,
     token_data: RefreshTokenRequest,
     db: AsyncSession = Depends(get_db),
 ) -> Any:
