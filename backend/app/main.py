@@ -23,12 +23,19 @@ from app.core.exceptions import (
     EncryptionError,
     ConfigurationError
 )
+from app.middleware.security_headers import SecurityHeadersMiddleware
+from app.middleware.rate_limit import limiter
+from slowapi.errors import RateLimitExceeded
+from app.core.validation import enforce_production_validation
 
 # Import all models to ensure they're registered with Base.metadata
 import app.models  # This imports all models from __init__.py
 
 # Setup logging
 logger = setup_logging()
+
+# Validate production configuration before app starts
+enforce_production_validation()
 
 
 @asynccontextmanager
@@ -116,13 +123,21 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Add rate limiter state
+app.state.limiter = limiter
+
+# Security headers middleware (add first for all responses)
+app.add_middleware(SecurityHeadersMiddleware)
+
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],  # Specific methods only
+    allow_headers=["Content-Type", "Authorization", "X-Request-ID", "Accept"],  # Specific headers only
+    expose_headers=["X-Request-ID"],
+    max_age=3600,  # Cache preflight requests for 1 hour
 )
 
 
@@ -139,16 +154,71 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint."""
-    # TODO: Add actual health checks for database, redis, etc.
+    """Basic health check endpoint."""
     return {
         "status": "healthy",
         "version": settings.APP_VERSION,
-        "services": {
-            "database": "pending",
-            "redis": "pending",
-            "llm": "pending",
+        "environment": settings.ENVIRONMENT,
+    }
+
+
+@app.get("/health/ready")
+async def readiness_check():
+    """Readiness probe - checks if app is ready to serve traffic."""
+    from app.db.base import get_session_factory
+    from app.core.cache import cache_manager
+    from sqlalchemy import text
+    
+    services_status = {
+        "database": "unknown",
+        "redis": "unknown",
+    }
+    
+    # Check database connectivity
+    try:
+        session_factory = get_session_factory()
+        async with session_factory() as session:
+            await session.execute(text("SELECT 1"))
+        services_status["database"] = "healthy"
+    except Exception as e:
+        logger.error(f"Database health check failed: {e}")
+        services_status["database"] = "unhealthy"
+    
+    # Check Redis connectivity  
+    try:
+        if cache_manager._redis is not None:
+            await cache_manager._redis.ping()
+            services_status["redis"] = "healthy"
+        else:
+            services_status["redis"] = "not_configured"
+    except Exception as e:
+        logger.error(f"Redis health check failed: {e}")
+        services_status["redis"] = "unhealthy"
+    
+    # Overall health status
+    all_healthy = all(
+        status in ["healthy", "not_configured"]
+        for status in services_status.values()
+    )
+    
+    status_code = 200 if all_healthy else 503
+    
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "status": "ready" if all_healthy else "not_ready",
+            "version": settings.APP_VERSION,
+            "services": services_status,
         }
+    )
+
+
+@app.get("/health/live")
+async def liveness_check():
+    """Liveness probe - checks if app is running."""
+    return {
+        "status": "alive",
+        "version": settings.APP_VERSION,
     }
 
 
@@ -229,6 +299,26 @@ async def validation_error_handler(request: Request, exc: PydanticValidationErro
                 "details": {"errors": exc.errors()}
             }
         }
+    )
+
+
+@app.exception_handler(RateLimitExceeded)
+async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    """Handle rate limit exceeded errors."""
+    logger.warning(
+        f"Rate limit exceeded for {request.client.host}",
+        extra={"path": request.url.path, "method": request.method}
+    )
+    return JSONResponse(
+        status_code=429,
+        content={
+            "error": {
+                "code": "RATE_LIMIT_EXCEEDED",
+                "message": "Too many requests. Please try again later.",
+                "details": {}
+            }
+        },
+        headers={"Retry-After": str(exc.detail)}
     )
 
 

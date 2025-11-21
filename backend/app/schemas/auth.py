@@ -1,8 +1,77 @@
 """Authentication Pydantic schemas."""
 from datetime import datetime
 from typing import Optional
+import re
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
+
+
+# Common weak passwords to reject
+COMMON_PASSWORDS = {
+    "password", "password123", "12345678", "qwerty123", "abc123456",
+    "password1", "admin123", "letmein", "welcome123", "monkey123",
+    "dragon123", "master123", "sunshine", "princess", "football",
+    "iloveyou", "trustno1", "baseball", "whatever", "secret123"
+}
+
+
+def validate_password_strength(password: str) -> str:
+    """Validate password strength requirements.
+    
+    Requirements:
+    - Minimum 12 characters
+    - At least one uppercase letter
+    - At least one lowercase letter
+    - At least one digit
+    - At least one special character
+    - Not in common passwords list
+    
+    Args:
+        password: Password to validate
+        
+    Returns:
+        The password if valid
+        
+    Raises:
+        ValueError: If password doesn't meet requirements
+    """
+    if len(password) < 12:
+        raise ValueError(
+            "Password must be at least 12 characters long"
+        )
+    
+    if len(password) > 128:
+        raise ValueError(
+            "Password must not exceed 128 characters"
+        )
+    
+    if not re.search(r"[A-Z]", password):
+        raise ValueError(
+            "Password must contain at least one uppercase letter"
+        )
+    
+    if not re.search(r"[a-z]", password):
+        raise ValueError(
+            "Password must contain at least one lowercase letter"
+        )
+    
+    if not re.search(r"\d", password):
+        raise ValueError(
+            "Password must contain at least one digit"
+        )
+    
+    if not re.search(r"[!@#$%^&*(),.?\":{}|<>_\-+=\[\]\\;'/`~]", password):
+        raise ValueError(
+            "Password must contain at least one special character (!@#$%^&* etc.)"
+        )
+    
+    # Check against common passwords (case-insensitive)
+    if password.lower() in COMMON_PASSWORDS:
+        raise ValueError(
+            "This password is too common. Please choose a stronger password."
+        )
+    
+    return password
 
 
 class UserBase(BaseModel):
@@ -14,7 +83,13 @@ class UserBase(BaseModel):
 
 class UserCreate(UserBase):
     """Schema for creating a new user."""
-    password: str = Field(..., min_length=8, max_length=100)
+    password: str = Field(..., min_length=12, max_length=128)
+    
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, v: str) -> str:
+        """Validate password strength."""
+        return validate_password_strength(v)
 
 
 class UserUpdate(BaseModel):
@@ -22,7 +97,15 @@ class UserUpdate(BaseModel):
     email: Optional[EmailStr] = None
     username: Optional[str] = Field(None, min_length=3, max_length=100)
     full_name: Optional[str] = None
-    password: Optional[str] = Field(None, min_length=8, max_length=100)
+    password: Optional[str] = Field(None, min_length=12, max_length=128)
+    
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, v: Optional[str]) -> Optional[str]:
+        """Validate password strength if provided."""
+        if v is not None:
+            return validate_password_strength(v)
+        return v
 
 
 class UserResponse(UserBase):
@@ -71,13 +154,25 @@ class PasswordResetRequest(BaseModel):
 class PasswordResetConfirm(BaseModel):
     """Schema for password reset confirmation."""
     token: str
-    new_password: str = Field(..., min_length=8, max_length=100)
+    new_password: str = Field(..., min_length=12, max_length=128)
+    
+    @field_validator("new_password")
+    @classmethod
+    def validate_new_password(cls, v: str) -> str:
+        """Validate new password strength."""
+        return validate_password_strength(v)
 
 
 class PasswordChange(BaseModel):
     """Schema for password change."""
     current_password: str
-    new_password: str = Field(..., min_length=8, max_length=100)
+    new_password: str = Field(..., min_length=12, max_length=128)
+    
+    @field_validator("new_password")
+    @classmethod
+    def validate_new_password(cls, v: str) -> str:
+        """Validate new password strength."""
+        return validate_password_strength(v)
 
 
 class RoleBase(BaseModel):

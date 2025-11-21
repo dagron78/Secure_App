@@ -1,11 +1,24 @@
 """Security utilities for authentication and authorization."""
 from datetime import datetime, timedelta
 from typing import Any, Optional, Union
+import hashlib
 
 from jose import JWTError, jwt
 import bcrypt
 
 from app.config import settings
+
+
+def hash_token(token: str) -> str:
+    """Hash a token using SHA256 for secure storage.
+    
+    Args:
+        token: The token to hash
+        
+    Returns:
+        The SHA256 hash of the token as a hex string
+    """
+    return hashlib.sha256(token.encode('utf-8')).hexdigest()
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:

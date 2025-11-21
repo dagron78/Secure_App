@@ -44,7 +44,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin, onRegister }) => 
         <div className="flex justify-center mb-6">
           <UserCircleIcon className="w-16 h-16 text-primary" />
         </div>
-        
+
         <h2 className="text-3xl font-bold text-center text-white mb-2">
           {isLogin ? 'Welcome Back' : 'Create Account'}
         </h2>
@@ -115,8 +115,9 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin, onRegister }) => 
               onChange={(e) => setPassword(e.target.value)}
               className="w-full px-4 py-2 bg-background border border-gray-600 rounded-md text-white focus:outline-none focus:border-primary"
               required
-              minLength={8}
+              minLength={12}
               disabled={isLoading}
+              placeholder="Min 12 chars, uppercase, lowercase, digit, special"
             />
           </div>
 

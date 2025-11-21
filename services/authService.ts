@@ -35,11 +35,11 @@ export const authService = {
     }
 
     const data: LoginResponse = await response.json();
-    
+
     // Store tokens
     localStorage.setItem(TOKEN_KEY, data.access_token);
     localStorage.setItem(REFRESH_TOKEN_KEY, data.refresh_token);
-    
+
     return data;
   },
 
@@ -135,7 +135,7 @@ export const authService = {
     const data: LoginResponse = await response.json();
     localStorage.setItem(TOKEN_KEY, data.access_token);
     localStorage.setItem(REFRESH_TOKEN_KEY, data.refresh_token);
-    
+
     return data.access_token;
   },
 };
@@ -143,7 +143,7 @@ export const authService = {
 // Helper function to make authenticated API calls
 export async function fetchWithAuth(url: string, options: RequestInit = {}): Promise<Response> {
   const token = authService.getToken();
-  
+
   const headers = {
     ...options.headers,
     ...(token ? { 'Authorization': `Bearer ${token}` } : {}),

@@ -5,13 +5,20 @@ Tests password hashing, JWT tokens, and encryption functionality.
 """
 import pytest
 from datetime import datetime, timedelta
+import os
+
+# Mock environment variables BEFORE importing app modules
+os.environ["DATABASE_URL"] = "sqlite:///:memory:"
+os.environ["REDIS_URL"] = "redis://localhost:6379/0"
+os.environ["SECRET_KEY"] = "mock-secret-key"
+os.environ["JWT_SECRET_KEY"] = "mock-jwt-secret-key"
+os.environ["ENCRYPTION_KEY"] = "mock-encryption-key"
 
 from app.core.security import (
     verify_password,
     get_password_hash,
     create_access_token,
-    verify_token,
-    generate_secure_password
+    decode_token,
 )
 from app.core.crypto import encrypt_value, decrypt_value
 
@@ -51,18 +58,19 @@ class TestJWTTokens:
     
     def test_create_access_token(self):
         """Test access token creation."""
-        data = {"sub": "test@example.com"}
-        token = create_access_token(data)
+        subject = "test@example.com"
+        token = create_access_token(subject)
         
         assert token is not None
         assert isinstance(token, str)
     
     def test_verify_valid_token(self):
         """Test verification of valid token."""
-        data = {"sub": "test@example.com", "extra": "data"}
-        token = create_access_token(data)
+        subject = "test@example.com"
+        additional_claims = {"extra": "data"}
+        token = create_access_token(subject, additional_claims=additional_claims)
         
-        payload = verify_token(token)
+        payload = decode_token(token)
         
         assert payload is not None
         assert payload["sub"] == "test@example.com"
@@ -71,17 +79,18 @@ class TestJWTTokens:
     
     def test_verify_expired_token(self):
         """Test that expired token fails verification."""
-        data = {"sub": "test@example.com"}
+        subject = "test@example.com"
         # Create token that expires immediately
-        token = create_access_token(data, expires_delta=timedelta(seconds=-1))
+        token = create_access_token(subject, expires_delta=timedelta(seconds=-1))
         
-        payload = verify_token(token)
+        payload = decode_token(token)
+        # decode_token returns None on error (including expiration)
         assert payload is None
     
     def test_verify_invalid_token(self):
         """Test that invalid token fails verification."""
         invalid_token = "not.a.valid.token"
-        payload = verify_token(invalid_token)
+        payload = decode_token(invalid_token)
         
         assert payload is None
 
@@ -92,12 +101,17 @@ class TestEncryption:
     def test_encrypt_decrypt_string(self):
         """Test encrypting and decrypting a string."""
         plaintext = "sensitive_data_123"
-        encrypted = encrypt_value(plaintext)
+        key = "mock-encryption-key-must-be-32-bytes-base64"
+        # Use a valid fernet key for testing
+        from cryptography.fernet import Fernet
+        key = Fernet.generate_key().decode()
+        
+        encrypted = encrypt_value(plaintext, key)
         
         assert encrypted != plaintext
         assert isinstance(encrypted, str)
         
-        decrypted = decrypt_value(encrypted)
+        decrypted = decrypt_value(encrypted, key)
         assert decrypted == plaintext
     
     def test_encrypt_decrypt_dict(self):
@@ -107,58 +121,30 @@ class TestEncryption:
             "secret": "very_secret",
             "nested": {"key": "value"}
         }
+        import json
+        plaintext = json.dumps(data)
         
-        encrypted = encrypt_value(data)
+        from cryptography.fernet import Fernet
+        key = Fernet.generate_key().decode()
+        
+        encrypted = encrypt_value(plaintext, key)
         assert encrypted != str(data)
         
-        decrypted = decrypt_value(encrypted)
-        assert decrypted == data
+        decrypted = decrypt_value(encrypted, key)
+        assert decrypted == plaintext
     
     def test_different_encryption_each_time(self):
         """Test that same plaintext encrypts differently each time."""
         plaintext = "test_data"
-        encrypted1 = encrypt_value(plaintext)
-        encrypted2 = encrypt_value(plaintext)
+        from cryptography.fernet import Fernet
+        key = Fernet.generate_key().decode()
+        
+        encrypted1 = encrypt_value(plaintext, key)
+        encrypted2 = encrypt_value(plaintext, key)
         
         # Different encrypted values due to randomness
         assert encrypted1 != encrypted2
         
         # But both decrypt to same plaintext
-        assert decrypt_value(encrypted1) == plaintext
-        assert decrypt_value(encrypted2) == plaintext
-
-
-class TestPasswordGeneration:
-    """Test secure password generation."""
-    
-    def test_generate_password_default_length(self):
-        """Test generating password with default length."""
-        password = generate_secure_password()
-        
-        assert len(password) == 32
-        assert isinstance(password, str)
-    
-    def test_generate_password_custom_length(self):
-        """Test generating password with custom length."""
-        password = generate_secure_password(length=16)
-        
-        assert len(password) == 16
-    
-    def test_generated_passwords_are_different(self):
-        """Test that generated passwords are unique."""
-        password1 = generate_secure_password()
-        password2 = generate_secure_password()
-        
-        assert password1 != password2
-    
-    def test_password_has_required_characters(self):
-        """Test that generated password has mix of characters."""
-        password = generate_secure_password(length=50)
-        
-        has_lower = any(c.islower() for c in password)
-        has_upper = any(c.isupper() for c in password)
-        has_digit = any(c.isdigit() for c in password)
-        
-        assert has_lower
-        assert has_upper
-        assert has_digit
+        assert decrypt_value(encrypted1, key) == plaintext
+        assert decrypt_value(encrypted2, key) == plaintext

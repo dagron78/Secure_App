@@ -15,22 +15,27 @@ from app.core.security import (
     get_password_hash,
     validate_refresh_token,
     verify_password,
+    hash_token,
 )
 from app.models.user import User, Session as UserSession
 from app.schemas.auth import (
-    LoginRequest,
-    PasswordChange,
-    RefreshTokenRequest,
-    TokenResponse,
     UserCreate,
     UserResponse,
+    LoginRequest,
+    TokenResponse,
+    RefreshTokenRequest,
+    PasswordResetRequest,
+    PasswordResetConfirm,
+    PasswordChange,
     UserWithRoles,
 )
+from app.middleware.rate_limit import auth_rate_limit
 
 router = APIRouter()
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+@auth_rate_limit()
 async def register(
     user_data: UserCreate,
     db: AsyncSession = Depends(get_db),
@@ -82,6 +87,7 @@ async def register(
 
 
 @router.post("/login", response_model=TokenResponse)
+@auth_rate_limit()
 async def login(
     login_data: LoginRequest,
     db: AsyncSession = Depends(get_db),
@@ -98,6 +104,11 @@ async def login(
     Raises:
         HTTPException: If credentials are invalid
     """
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    logger.info(f"[AUTH] Login attempt for username: {login_data.username}")
+    
     # Try to find user by username or email - query specific columns only
     result = await db.execute(
         select(User.id, User.username, User.email, User.hashed_password, User.is_active).where(
@@ -107,6 +118,7 @@ async def login(
     row = result.one_or_none()
     
     if not row:
+        logger.warning(f"[AUTH] User not found: {login_data.username}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
@@ -114,15 +126,20 @@ async def login(
         )
     
     user_id, username, email, hashed_password, is_active = row
+    logger.info(f"[AUTH] User found: {username} (ID: {user_id}, active: {is_active})")
     
     if not verify_password(login_data.password, hashed_password):
+        logger.warning(f"[AUTH] Invalid password for user: {username}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
     
+    logger.info(f"[AUTH] Password verified for user: {username}")
+    
     if not is_active:
+        logger.warning(f"[AUTH] Inactive user attempted login: {username}")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Inactive user",
@@ -134,6 +151,7 @@ async def login(
     # Create tokens
     access_token = create_access_token(subject=user_id_str)
     refresh_token = create_refresh_token(subject=user_id_str)
+    logger.info(f"[AUTH] Tokens generated for user: {username}")
     
     # Update last login
     await db.execute(
@@ -143,15 +161,18 @@ async def login(
     )
     
     # Create session record for token rotation and logout
+    # Store hashed tokens for security
     session = UserSession(
         user_id=user_id,
-        token=access_token,
-        refresh_token=refresh_token,
+        token=hash_token(access_token),
+        refresh_token=hash_token(refresh_token),
         is_active=True,
         expires_at=datetime.utcnow() + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
     )
     db.add(session)
     await db.commit()
+    
+    logger.info(f"[AUTH] Login successful for user: {username} (ID: {user_id})")
     
     return {
         "access_token": access_token,
@@ -162,8 +183,9 @@ async def login(
 
 
 @router.post("/refresh", response_model=TokenResponse)
+@auth_rate_limit()
 async def refresh_token(
-    refresh_data: RefreshTokenRequest,
+    token_data: RefreshTokenRequest,
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     """Refresh access token using refresh token.
@@ -179,7 +201,7 @@ async def refresh_token(
         HTTPException: If refresh token is invalid
     """
     # Validate refresh token
-    user_id = validate_refresh_token(refresh_data.refresh_token)
+    user_id = validate_refresh_token(token_data.refresh_token)
     if user_id is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -196,9 +218,10 @@ async def refresh_token(
             detail="User not found or inactive",
         )
     
-    # Invalidate old session
+    # Invalidate old session by looking up hashed token
+    hashed_refresh_token = hash_token(token_data.refresh_token)
     result = await db.execute(
-        select(UserSession).where(UserSession.refresh_token == refresh_data.refresh_token)
+        select(UserSession).where(UserSession.refresh_token == hashed_refresh_token)
     )
     old_session = result.scalar_one_or_none()
     if old_session:
@@ -209,11 +232,11 @@ async def refresh_token(
     access_token = create_access_token(subject=user.id)
     new_refresh_token = create_refresh_token(subject=user.id)
     
-    # Create new session
+    # Create new session with hashed tokens
     session = UserSession(
         user_id=user.id,
-        token=access_token,
-        refresh_token=new_refresh_token,
+        token=hash_token(access_token),
+        refresh_token=hash_token(new_refresh_token),
         is_active=True,
         expires_at=datetime.utcnow() + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
     )

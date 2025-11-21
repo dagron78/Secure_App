@@ -38,7 +38,7 @@ class CacheManager:
         self.redis_url = settings.REDIS_URL
         self.redis: Optional[aioredis.Redis] = None
         self.default_ttl = 300  # 5 minutes
-        self.key_prefix = f"{settings.ENV}:cache:"
+        self.key_prefix = f"{settings.ENVIRONMENT}:cache:"
         
     async def connect(self):
         """Initialize Redis connection."""

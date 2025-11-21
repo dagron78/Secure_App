@@ -13,6 +13,14 @@ from typing import Generator, AsyncGenerator
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.pool import NullPool
 from httpx import AsyncClient
+import os
+
+# Mock environment variables BEFORE importing app modules
+os.environ["DATABASE_URL"] = "sqlite:///:memory:"
+os.environ["REDIS_URL"] = "redis://localhost:6379/0"
+os.environ["SECRET_KEY"] = "mock-secret-key"
+os.environ["JWT_SECRET_KEY"] = "mock-jwt-secret-key"
+os.environ["ENCRYPTION_KEY"] = "mock-encryption-key"
 
 from app.main import app
 from app.db.base import Base, get_db

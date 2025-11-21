@@ -10,7 +10,7 @@ from sqlalchemy.orm import selectinload
 from app.config import settings
 from app.core.security import validate_access_token
 from app.db.base import get_db
-from app.models.user import User
+from app.models.user import User, Role, Permission
 
 # HTTP Bearer token authentication
 security = HTTPBearer()
@@ -44,11 +44,13 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    # Get user from database with roles eagerly loaded
+    # Get user from database with roles and permissions eagerly loaded
     result = await db.execute(
         select(User)
         .where(User.id == int(user_id))
-        .options(selectinload(User.roles))
+        .options(
+            selectinload(User.roles).selectinload(Role.permissions)
+        )
     )
     user = result.scalar_one_or_none()
     

@@ -30,12 +30,13 @@ class Document(Base):
     source_type = Column(String(50), nullable=False, index=True)  # file, url, database, api
     
     # Content
-    content = Column(Text, nullable=False)
-    content_hash = Column(String(64), nullable=False, index=True)  # SHA-256 hash for deduplication
+    # Content
+    # content and content_hash removed as they are not in DB schema
+
     
     # Document metadata
     meta_data = Column(JSON, nullable=True)  # Custom metadata
-    tags = Column(ARRAY(String), nullable=True)  # Document tags
+    tags = Column(JSON, nullable=True)  # Document tags (using JSON for SQLite compatibility)
     file_type = Column(String(50), nullable=True)  # pdf, docx, txt, etc.
     file_size = Column(Integer, nullable=True)  # Size in bytes
     
@@ -94,7 +95,7 @@ class DocumentChunk(Base):
     meta_data = Column(JSON, nullable=True)  # Page number, section, etc.
     
     # Search optimization
-    search_keywords = Column(ARRAY(String), nullable=True)  # Extracted keywords
+    search_keywords = Column(JSON, nullable=True)  # Extracted keywords (using JSON for SQLite compatibility)
     
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
